@@ -17,11 +17,21 @@ from abc import ABC, abstractmethod
 
 import torch
 import torch.nn as nn
+import hydra
 
 from .multimodal_encoder.builder import build_vision_tower
-from .multimodal_projector.builder import build_vision_projector
+from .multimodal_projector.builder import build_vision_projector, build_pose_projector
 
 from llava.constants import IGNORE_INDEX, IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_PATCH_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
+
+# GymGPT
+# HMR2
+from hmr2.configs import dataset_config
+from train import save_configs, root, HMR2Predictor
+from hmr2.models.hmr2 import HMR2
+
+# PHALP
+# from track import PHALP_Prime_HMR2
 
 
 class LlavaMetaModel:
@@ -32,6 +42,7 @@ class LlavaMetaModel:
         if hasattr(config, "mm_vision_tower"):
             self.vision_tower = build_vision_tower(config, delay_load=True)
             self.mm_projector = build_vision_projector(config)
+            self.pose_projector = build_pose_projector()
 
     def get_vision_tower(self):
         vision_tower = getattr(self, 'vision_tower', None)
@@ -83,7 +94,22 @@ class LlavaMetaModel:
 
 
 class LlavaMetaForCausalLM(ABC):
+    def __init__(self):
+        super(LlavaMetaForCausalLM, self).__init__()
+        self.init_hmr2()
 
+    @hydra.main(version_base="1.2", config_path=str(root/"hmr2/configs_hydra"), config_name="train.yaml")
+    def init_hmr2(self, cfg: DictConfig):
+        # @hydra.main(version_base="1.2", config_path=str(root/"hmr2/configs_hydra"), config_name="train.yaml")
+        
+        dataset_cfg = dataset_config()
+
+        # Save configs
+        save_configs(cfg, dataset_cfg, cfg.paths.output_dir)
+
+        # Setup model
+        self.hmr2_model = HMR2(cfg)
+    
     @abstractmethod
     def get_model(self):
         pass
@@ -95,9 +121,19 @@ class LlavaMetaForCausalLM(ABC):
         image_features = self.get_model().get_vision_tower()(images)
         image_features = self.get_model().mm_projector(image_features)
         return image_features
+    
+    def encode_poses(self, poses):
+        flattened_poses = poses.view(poses.size(0), -1)
+        return self.pose_projector(flattened_poses)
 
+    def prepare_inputs_labels_for_gym(
+        self, input_ids, attention_mask, past_key_values, labels, embeddings
+    ):  
+        # Process pose embeddings
+        pose_features = self.encode_poses(embeddings)
+    
     def prepare_inputs_labels_for_multimodal(
-        self, input_ids, attention_mask, past_key_values, labels, images
+        self, input_ids, attention_mask, past_key_values, labels, images, is_pose=False
     ):
         vision_tower = self.get_vision_tower()
         if vision_tower is None or images is None or input_ids.shape[1] == 1:
@@ -112,7 +148,10 @@ class LlavaMetaForCausalLM(ABC):
             image_features = torch.split(image_features, split_sizes, dim=0)
             image_features = [x.flatten(0, 1) for x in image_features]
         else:
-            image_features = self.encode_images(images)
+            if is_pose:
+                image_features = self.encode_poses(images)
+            else:
+                image_features = self.encode_images(images)
 
         new_input_embeds = []
         new_labels = [] if labels is not None else None
