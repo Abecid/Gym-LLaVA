@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 import json
 import logging
 import pathlib
+import numpy as np
 from typing import Dict, Optional, Sequence, List
 
 import torch
@@ -624,6 +625,69 @@ def preprocess(
     return dict(input_ids=input_ids, labels=targets)
 
 
+class LazySupervisedPoseDataset(Dataset):
+    """Dataset for supervised fine-tuning on pose data"""
+    
+    def __init__(self, data_path:str,
+                 tokenizer: transformers.PreTrainedTokenizer,
+                 data_args: DataArguments):
+        super(LazySupervisedPoseDataset, self).__init__()
+        list_data_dict = json.load(open(data_path, "r"))
+
+        rank0_print("Formatting inputs...Skip in lazy mode")
+        self.tokenizer = tokenizer
+        self.list_data_dict = list_data_dict
+        self.data_args = data_args
+        
+    @property
+    def lengths(self):
+        length_list = []
+        for sample in self.list_data_dict:
+            img_tokens = 128 if 'image' in sample else 0
+            length_list.append(sum(len(conv['value'].split()) for conv in sample['conversations']) + img_tokens)
+        return length_list
+
+    @property
+    def modality_lengths(self):
+        length_list = []
+        for sample in self.list_data_dict:
+            cur_len = sum(len(conv['value'].split()) for conv in sample['conversations'])
+            cur_len = cur_len if 'image' in sample else -cur_len
+            length_list.append(cur_len)
+        return length_list
+
+    def __getitem__(self, i) -> Dict[str, torch.Tensor]:
+        sources = self.list_data_dict[i]
+        if isinstance(i, int):
+            sources = [sources]
+        assert len(sources) == 1, "Don't know why it is wrapped to a list"  # FIXME
+        if 'pose' in sources[0]:
+            pose_file = self.list_data_dict[i]['pose']
+            pose_folder = self.data_args.pose_folder
+            pose = torch.from_numpy(pose)(np.load(os.path.join(pose_folder, pose_file)))
+            
+            sources = preprocess_multimodal(
+                copy.deepcopy([e["conversations"] for e in sources]),
+                self.data_args)
+        else:
+            sources = copy.deepcopy([e["conversations"] for e in sources])
+        data_dict = preprocess(
+            sources,
+            self.tokenizer,
+            has_image=('image' in self.list_data_dict[i]))
+        if isinstance(i, int):
+            data_dict = dict(input_ids=data_dict["input_ids"][0],
+                             labels=data_dict["labels"][0])
+
+        # pose exist in the data
+        if 'pose' in self.list_data_dict[i]:
+            data_dict['image'] = pose
+        elif self.data_args.is_multimodal:
+            # image does not exist in the data, but the model is multimodal
+            crop_size = self.data_args.image_processor.crop_size
+            data_dict['image'] = torch.zeros(3, crop_size['height'], crop_size['width'])
+        return data_dict
+
 class LazySupervisedDataset(Dataset):
     """Dataset for supervised fine-tuning."""
 
@@ -637,7 +701,7 @@ class LazySupervisedDataset(Dataset):
         self.tokenizer = tokenizer
         self.list_data_dict = list_data_dict
         self.data_args = data_args
-
+    
     def __len__(self):
         return len(self.list_data_dict)
 
