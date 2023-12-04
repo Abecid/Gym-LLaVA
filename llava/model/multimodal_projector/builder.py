@@ -51,4 +51,5 @@ def build_vision_projector(config, delay_load=False, **kwargs):
     raise ValueError(f'Unknown projector type: {projector_type}')
 
 def build_pose_projector(config):
+    # Pose hidden size: 207
     return nn.Linear(config.pose_hidden_size, config.hidden_size)
