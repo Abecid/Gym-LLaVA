@@ -638,6 +638,7 @@ class LazySupervisedPoseDataset(Dataset):
         self.tokenizer = tokenizer
         self.list_data_dict = list_data_dict
         self.data_args = data_args
+        self.positional_encoding = PositionalEncoding(d_model=207)
         
     @property
     def lengths(self):
@@ -657,6 +658,9 @@ class LazySupervisedPoseDataset(Dataset):
         return length_list
 
     def __getitem__(self, i) -> Dict[str, torch.Tensor]:
+        # Get pose embedding 
+        # Pose projection
+        # Add positional encoding
         sources = self.list_data_dict[i]
         if isinstance(i, int):
             sources = [sources]
