@@ -643,7 +643,7 @@ class LazySupervisedPoseDataset(Dataset):
     def lengths(self):
         length_list = []
         for sample in self.list_data_dict:
-            img_tokens = 128 if 'image' in sample else 0
+            img_tokens = 128 if 'pose' in sample else 0
             length_list.append(sum(len(conv['value'].split()) for conv in sample['conversations']) + img_tokens)
         return length_list
 
@@ -664,7 +664,7 @@ class LazySupervisedPoseDataset(Dataset):
         if 'pose' in sources[0]:
             pose_file = self.list_data_dict[i]['pose']
             pose_folder = self.data_args.pose_folder
-            pose = torch.from_numpy(pose)(np.load(os.path.join(pose_folder, pose_file)))
+            pose = torch.from_numpy((np.load(os.path.join(pose_folder, pose_file))))
             
             sources = preprocess_multimodal(
                 copy.deepcopy([e["conversations"] for e in sources]),
@@ -681,11 +681,11 @@ class LazySupervisedPoseDataset(Dataset):
 
         # pose exist in the data
         if 'pose' in self.list_data_dict[i]:
-            data_dict['image'] = pose
+            data_dict['pose'] = pose
         elif self.data_args.is_multimodal:
             # image does not exist in the data, but the model is multimodal
             crop_size = self.data_args.image_processor.crop_size
-            data_dict['image'] = torch.zeros(3, crop_size['height'], crop_size['width'])
+            data_dict['pose'] = torch.zeros(3, crop_size['height'], crop_size['width'])
         return data_dict
 
 class LazySupervisedDataset(Dataset):
